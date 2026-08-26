@@ -1,8 +1,10 @@
 from secrets import token_urlsafe
 from typing import Annotated
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -40,14 +42,39 @@ def generate_link(
     slc: ShortLinkCreate,
     session: Annotated[Session, Depends(get_db)],
 ) -> ShortLink:
-    sl = ShortLink(destination_url=str(slc.destination_url), short_code=generate_short_code())
-    session.add(sl)
-    session.commit()
-    session.refresh(sl)
+    for _ in range(5):
+        try:
+            sl = ShortLink(
+                destination_url=str(slc.destination_url), short_code=generate_short_code()
+            )
+            session.add(sl)
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            continue
+        else:
+            session.refresh(sl)
+            return sl
 
-    return sl
+    raise HTTPException(status_code=500, detail="Could not generate a unique short code")
 
 
 @app.get("/api/v1/links", tags=["links"], response_model=list[ShortLinkResponse])
 def get_links(session: Annotated[Session, Depends(get_db)]) -> list[ShortLink]:
     return session.scalars(select(ShortLink).order_by(ShortLink.id)).all()
+
+
+@app.get("/{short_code}", tags=["redirects"])
+def get_short_code(
+    short_code: str,
+    session: Annotated[Session, Depends(get_db)],
+) -> RedirectResponse:
+    short_link = session.scalar(select(ShortLink).where(ShortLink.short_code == short_code))
+
+    if short_link is None:
+        raise HTTPException(status_code=404, detail="Short link not found!")
+
+    return RedirectResponse(
+        url=short_link.destination_url,
+        status_code=307,
+    )
