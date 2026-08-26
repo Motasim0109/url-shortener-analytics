@@ -3,13 +3,13 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import ShortLink
-from app.schemas import ShortLinkCreate, ShortLinkResponse
+from app.models import ClickEvent, ShortLink
+from app.schemas import ShortLinkAnalytics, ShortLinkCreate, ShortLinkResponse
 
 app = FastAPI(
     title="URL Shortener Analytics",
@@ -74,7 +74,34 @@ def get_short_code(
     if short_link is None:
         raise HTTPException(status_code=404, detail="Short link not found!")
 
+    event = ClickEvent(short_link_id=short_link.id)
+    session.add(event)
+    session.commit()
+
     return RedirectResponse(
         url=short_link.destination_url,
         status_code=307,
+    )
+
+
+@app.get(
+    "/api/v1/links/{short_code}/analytics", tags=["analytics"], response_model=ShortLinkAnalytics
+)
+def get_link_analytics(
+    short_code: str,
+    session: Annotated[Session, Depends(get_db)],
+) -> ShortLinkAnalytics:
+    short_link = session.scalar(select(ShortLink).where(ShortLink.short_code == short_code))
+
+    if short_link is None:
+        raise HTTPException(status_code=404, detail="Short link not found!")
+
+    click_count = session.scalar(
+        select(func.count(ClickEvent.id)).where(ClickEvent.short_link_id == short_link.id)
+    )
+
+    return ShortLinkAnalytics(
+        short_code=short_link.short_code,
+        destination_url=short_link.destination_url,
+        click_count=click_count or 0,
     )

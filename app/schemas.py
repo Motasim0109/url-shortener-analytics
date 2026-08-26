@@ -14,3 +14,9 @@ class ShortLinkResponse(BaseModel):
     destination_url: str
     short_code: str
     created_at: datetime
+
+
+class ShortLinkAnalytics(BaseModel):
+    short_code: str
+    destination_url: str
+    click_count: int
