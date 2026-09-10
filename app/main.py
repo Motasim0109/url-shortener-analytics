@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from secrets import token_urlsafe
 from typing import Annotated
 
@@ -28,6 +29,7 @@ from app.security import (
 )
 
 bearer_scheme = HTTPBearer(auto_error=False)
+RESERVED_SHORT_CODES = {"docs", "redoc"}
 
 app = FastAPI(
     title="URL Shortener Analytics",
@@ -88,17 +90,25 @@ def generate_link(
     slc: ShortLinkCreate,
     session: Annotated[Session, Depends(get_db)],
 ) -> ShortLink:
+    if slc.custom_alias in RESERVED_SHORT_CODES:
+        raise HTTPException(status_code=409, detail="Custom alias is reserved")
     for _ in range(5):
         try:
             sl = ShortLink(
                 destination_url=str(slc.destination_url),
-                short_code=generate_short_code(),
+                short_code=slc.custom_alias or generate_short_code(),
                 owner_id=current_user.id,
+                expires_at=slc.expires_at,
             )
+
             session.add(sl)
             session.commit()
         except IntegrityError:
             session.rollback()
+
+            if slc.custom_alias is not None:
+                raise HTTPException(status_code=409, detail="Custom alias already in use") from None
+
             continue
         else:
             session.refresh(sl)
@@ -176,6 +186,9 @@ def get_short_code(
 
     if short_link is None:
         raise HTTPException(status_code=404, detail="Short link not found!")
+
+    if short_link.expires_at is not None and short_link.expires_at <= datetime.now(UTC):
+        raise HTTPException(status_code=410, detail="Short link has expired")
 
     event = ClickEvent(short_link_id=short_link.id)
     session.add(event)
