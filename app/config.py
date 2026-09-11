@@ -2,6 +2,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    redis_url: str
+    redis_cache_ttl_seconds: int = 300
     database_url: str
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"

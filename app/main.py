@@ -5,10 +5,13 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from redis.exceptions import RedisError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.cache import CachedShortLink, cache_short_link, get_cached_short_link
+from app.config import settings
 from app.database import get_db
 from app.models import ClickEvent, ShortLink, User
 from app.schemas import (
@@ -182,20 +185,47 @@ def get_short_code(
     short_code: str,
     session: Annotated[Session, Depends(get_db)],
 ) -> RedirectResponse:
-    short_link = session.scalar(select(ShortLink).where(ShortLink.short_code == short_code))
 
-    if short_link is None:
-        raise HTTPException(status_code=404, detail="Short link not found!")
+    try:
+        cached_short_link = get_cached_short_link(short_code)
+    except RedisError:
+        cached_short_link = None
 
-    if short_link.expires_at is not None and short_link.expires_at <= datetime.now(UTC):
+    cache_miss = cached_short_link is None
+
+    if cache_miss:
+        short_link = session.scalar(select(ShortLink).where(ShortLink.short_code == short_code))
+
+        if short_link is None:
+            raise HTTPException(status_code=404, detail="Short link not found!")
+
+        cached_short_link = CachedShortLink(
+            id=short_link.id,
+            destination_url=short_link.destination_url,
+            expires_at=short_link.expires_at,
+        )
+
+    if cached_short_link.expires_at is not None and cached_short_link.expires_at <= datetime.now(
+        UTC
+    ):
         raise HTTPException(status_code=410, detail="Short link has expired")
 
-    event = ClickEvent(short_link_id=short_link.id)
+    if cache_miss:
+        try:
+            cache_short_link(
+                short_code,
+                cached_short_link,
+                settings.redis_cache_ttl_seconds,
+            )
+        except RedisError:
+            pass
+
+    event = ClickEvent(short_link_id=cached_short_link.id)
     session.add(event)
     session.commit()
 
     return RedirectResponse(
-        url=short_link.destination_url,
+        url=cached_short_link.destination_url,
         status_code=307,
     )
 
