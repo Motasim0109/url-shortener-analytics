@@ -1,8 +1,6 @@
 # URL Shortener with Click Analytics
 
-A backend-focused URL shortener built incrementally with FastAPI, PostgreSQL, Redis, and Docker.
-
-The project is built one backend concept at a time, with manual validation at each checkpoint.
+A backend-focused URL shortener built with FastAPI, PostgreSQL, Redis, and Docker.
 
 ## Features
 
